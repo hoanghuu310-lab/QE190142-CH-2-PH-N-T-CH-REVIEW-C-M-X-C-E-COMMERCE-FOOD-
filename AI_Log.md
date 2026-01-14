@@ -940,3 +940,329 @@ Nhóm xây dựng một crawler thống nhất cho các nền tảng đánh giá
 🔥 Chỉnh code cho chạy chắc chắn theo từng platform
 
 Chỉ cần nói: “làm tiếp phần …
+
+
+AI LOG ngày 14/1/2026
+Vấn đề này rất thực tế. Khi bạn lướt ShopeeFood trên web (hoặc app), bạn sẽ thấy một quán ăn ngon và muốn crawl nó, nhưng URL của ShopeeFood lại có dạng:
+
+`https://shopeefood.vn/ha-noi/com-tam-phuc-loc-tho-nguyen-trai`
+
+Trong khi đó, API của chúng ta lại yêu cầu tham số là `request_id` (ID số, ví dụ: `99999`), chứ không phải cái chuỗi "com-tam-phuc-loc-tho..." kia.
+
+Vậy làm sao để **biến Link Web -> ID số** để Crawler chạy được?
+
+Có 2 cách: Cách thủ công (để test) và Cách tự động (để code).
+
+---
+
+### CÁCH 1: LẤY ID THỦ CÔNG TỪ TRÌNH DUYỆT (Dễ nhất)
+
+Bạn không cần code gì cả, chỉ cần mắt tinh một chút.
+
+1. Mở link quán ăn đó trên trình duyệt Chrome/Edge.
+* Ví dụ: `shopeefood.vn/ho-chi-minh/tra-sua-toco-toco`
+
+
+2. Bấm chuột phải vào bất kỳ đâu trên trang -> Chọn **"Inspect" (Kiểm tra)** hoặc bấm `F12`.
+3. Bấm tổ hợp phím **`Ctrl + F`** (Tìm kiếm trong mã nguồn).
+4. Gõ từ khóa: **`"delivery_id":`**
+5. Bạn sẽ thấy nó highlight một dòng code có dạng: `{"delivery_id": 12345, ...}`
+* 👉 Số **12345** chính là cái ID bạn cần tìm!
+
+
+
+---
+
+### CÁCH 2: DÙNG CODE PYTHON ĐỂ "GIẢI MÃ" LINK (Tự động hóa)
+
+Nếu bạn muốn input vào là một danh sách Link và tool tự crawl, bạn cần một hàm để "Resolve Slug".
+
+ShopeeFood có một API ẩn để làm việc này. API này nhận vào cái đuôi URL (slug) và trả về ID quán.
+
+**Code Python để lấy ID từ Link:**
+
+```python
+import requests
+
+def get_id_from_url(shopeefood_url):
+    """
+    Input: https://shopeefood.vn/ho-chi-minh/tra-sua-toco-toco
+    Output: 12345 (ID của quán)
+    """
+    # 1. Tách lấy phần slug (cái đuôi sau cùng)
+    # Ví dụ: "tra-sua-toco-toco"
+    if "/ha-noi/" in shopeefood_url:
+        slug = shopeefood_url.split("/ha-noi/")[-1]
+    elif "/ho-chi-minh/" in shopeefood_url:
+        slug = shopeefood_url.split("/ho-chi-minh/")[-1]
+    else:
+        # Link dạng khác hoặc tỉnh khác, thử split dấu / cuối cùng
+        slug = shopeefood_url.strip("/").split("/")[-1]
+    
+    # Loại bỏ các tham số thừa nếu có (vd: ?share=...)
+    slug = slug.split("?")[0]
+
+    print(f"🔍 Đang tìm ID cho slug: {slug}...")
+
+    # 2. Gọi API để lấy thông tin quán từ slug
+    api_url = f"https://gappapi.deliverynow.vn/api/delivery/get_detail?request_id={slug}&id_type=2"
+    
+    headers = {
+        'x-foody-client-type': '1',
+        'x-foody-client-version': '3.0.0',
+        'x-foody-api-version': '1',
+    }
+
+    try:
+        response = requests.get(api_url, headers=headers)
+        data = response.json()
+        
+        # Lấy delivery_id từ kết quả trả về
+        delivery_detail = data.get('reply', {}).get('delivery_detail', {})
+        found_id = delivery_detail.get('delivery_id')
+        
+        if found_id:
+            print(f"✅ Tìm thấy ID: {found_id}")
+            return found_id
+        else:
+            print("❌ Không tìm thấy ID nào.")
+            return None
+            
+    except Exception as e:
+        print(f"❌ Lỗi: {e}")
+        return None
+
+# --- CHẠY THỬ ---
+link_test = "https://shopeefood.vn/ho-chi-minh/phuc-long-lotte-mart-le-dai-hanh"
+quan_id = get_id_from_url(link_test)
+
+# Sau khi có ID, bạn ném nó vào hàm crawl comment lúc nãy
+# if quan_id:
+#     reviews = get_reviews_of_restaurant(quan_id, ...)
+
+```
+
+### Tại sao lại là `id_type=2`?
+
+Trong API ShopeeFood:
+
+* `id_type=1`: Nghĩa là bạn đang tìm theo số ID (Ví dụ: `request_id=12345`).
+* `id_type=2`: Nghĩa là bạn đang tìm theo tên Slug (Ví dụ: `request_id=quan-com-tam`).
+
+Bạn có thể tích hợp đoạn hàm `get_id_from_url` này vào crawler chính để tiện sử dụng hơn. Bạn muốn mình ghép nó vào file `crawl_shopeefood.py` luôn không?
+Bạn hỏi rất đúng ý! Logic của bạn là: *Nếu link quán đã là `shopeefood.vn/ha-noi/...` thì chắc chắn nó ở Hà Nội rồi, cần gì phải lưu cái `city_id` (217 hay 218) làm gì cho thừa?*
+
+Tuy nhiên, trong **Khoa học Dữ liệu (Data Science)** và khi làm **Hệ thống lớn**, việc lưu mã định danh (ID) vùng miền vẫn cực kỳ quan trọng vì 3 lý do "chí mạng" sau:
+
+### 1. Máy tính "thích" số hơn chữ (Performance)
+
+* Khi bạn crawl 50.000 quán, nếu bạn muốn so sánh Rating trung bình của Hà Nội vs TP.HCM.
+* **Cách dùng Text (như bạn nghĩ):**
+`SELECT avg(rating) FROM reviews WHERE url LIKE '%ha-noi%'`
+-> Máy phải quét từng ký tự trong chuỗi URL dài ngoằng -> **Rất Chậm**.
+* **Cách dùng ID (Chuẩn Data Science):**
+`SELECT avg(rating) FROM reviews WHERE city_id = 218`
+-> So sánh số nguyên (Integer) -> **Cực Nhanh**.
+
+### 2. Xử lý "Biên giới mềm" và Dữ liệu bẩn
+
+* Đôi khi URL không chứa tên thành phố rõ ràng hoặc cấu trúc URL thay đổi (ShopeeFood lâu lâu lại đổi format URL).
+* Có những quán chuỗi (Franchise) tên giống hệt nhau. Ví dụ: "Trà sữa Tocotoco". Nếu bạn chỉ lưu tên quán hoặc URL chung chung, bạn sẽ không biết comment này là chửi Tocotoco ở Cầu Giấy (HN) hay Tocotoco ở Quận 1 (HCM).
+* `city_id` là định danh gốc từ Database của ShopeeFood, nó không bao giờ sai.
+
+### 3. Phục vụ cho vẽ biểu đồ (Visualization)
+
+* Các thư viện vẽ biểu đồ như PowerBI, Tableau hay Python (Matplotlib) thường yêu cầu cột phân loại rõ ràng (Categorical Data).
+* Nếu bạn lưu `city_id=217`, bạn có thể dễ dàng map nó thành "Miền Nam", `218` thành "Miền Bắc" để vẽ biểu đồ so sánh vùng miền.
+
+### Tóm lại:
+
+Bạn **hoàn toàn có thể** suy ra vùng miền từ URL, nhưng **đừng làm thế**. Hãy lưu `city_id` hoặc tên thành phố (`city_name`) thành một cột riêng trong file JSON.
+
+**Lời khuyên:**
+Trong file `schema_sentiment.py` mình gửi, mình đã để trường `city` là String. Bạn có thể lưu thẳng là `"HaNoi"` hoặc `"HCM"` cho dễ đọc cũng được, không nhất thiết phải lưu số `218`. Nhưng **bắt buộc phải có cột này** tách biệt ra khỏi URL.
+
+Bạn có muốn mình sửa lại code Crawler để nó **tự động phát hiện** thành phố từ cái Link bạn nhập vào không? (Thay vì bạn phải nhập tay ID thành phố).
+Ý tưởng của bạn rất thực tế. Thay vì phải ngồi tra ID thành phố thủ công, chúng ta sẽ để code **tự động "đọc" URL** để biết quán đó ở Hà Nội hay Sài Gòn, từ đó tự động ném dữ liệu vào đúng file (tệp khách hàng) tương ứng.
+
+Dưới đây là phiên bản **Crawler Thông Minh (Smart Crawler)**. Bạn chỉ cần ném một danh sách Link lộn xộn vào, nó sẽ tự lọc và chia về đúng chuồng.
+
+### 1. File Schema (`schema_sentiment.py`)
+
+*Giữ nguyên file schema cũ mình đã gửi, không cần sửa gì.*
+
+### 2. File Code Crawl Mới (`crawl_auto_city.py`)
+
+Hãy tạo file mới tên **`crawl_auto_city.py`** và dán code này vào.
+
+```python
+import requests
+import json
+import time
+import random
+import os
+from schema_sentiment import ReviewItem
+
+# --- CẤU HÌNH ---
+DATA_FOLDER = "data_sentiment"
+if not os.path.exists(DATA_FOLDER):
+    os.makedirs(DATA_FOLDER)
+
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'X-Requested-With': 'XMLHttpRequest',
+    'x-foody-client-type': '1',
+    'x-foody-client-version': '3.0.0',
+    'x-foody-api-version': '1',
+}
+
+# BẢNG TỪ ĐIỂN MAP TỪ URL -> ID THÀNH PHỐ
+CITY_MAPPING = {
+    "ha-noi": {"id": 218, "name": "HaNoi"},
+    "ho-chi-minh": {"id": 217, "name": "HCM"},
+    "da-nang": {"id": 219, "name": "DaNang"},
+    "hai-phong": {"id": 220, "name": "HaiPhong"},
+    # Có thể thêm các tỉnh khác nếu cần
+}
+
+def analyze_url(url):
+    """
+    Phân tích URL để tách Slug và Thành phố
+    Input: https://shopeefood.vn/ha-noi/pho-thin-lo-duc
+    Output: slug='pho-thin-lo-duc', city_info={'id': 218, 'name': 'HaNoi'}
+    """
+    # Xóa phần https://shopeefood.vn/
+    clean_url = url.replace("https://shopeefood.vn/", "").replace("http://shopeefood.vn/", "")
+    parts = clean_url.split("/")
+    
+    # URL chuẩn thường là: [ten-thanh-pho]/[ten-quan]
+    if len(parts) >= 2:
+        city_slug = parts[0]
+        restaurant_slug = parts[1].split("?")[0] # Bỏ tham số ? sau slug
+        
+        # Tra cứu trong từ điển
+        city_info = CITY_MAPPING.get(city_slug)
+        if city_info:
+            return restaurant_slug, city_info
+            
+    return None, None
+
+def get_restaurant_id_from_slug(slug):
+    """Gọi API để đổi tên quán (slug) thành ID số"""
+    url = f"https://gappapi.deliverynow.vn/api/delivery/get_detail?request_id={slug}&id_type=2"
+    try:
+        resp = requests.get(url, headers=HEADERS)
+        data = resp.json()
+        delivery_detail = data.get('reply', {}).get('delivery_detail', {})
+        
+        return {
+            "id": delivery_detail.get('delivery_id'),
+            "name": delivery_detail.get('name')
+        }
+    except:
+        return None
+
+def crawl_reviews_by_link(url_list, limit_per_shop=100):
+    print(f"🚀 Đang xử lý danh sách {len(url_list)} quán ăn...")
+    
+    for url in url_list:
+        print(f"\n🔗 Checking: {url}")
+        
+        # 1. Tự động phát hiện thành phố
+        slug, city_info = analyze_url(url)
+        
+        if not city_info:
+            print("   ⚠️ Không nhận diện được thành phố từ Link này. Bỏ qua.")
+            continue
+            
+        print(f"   -> Phát hiện: {city_info['name']} (Slug: {slug})")
+        
+        # 2. Lấy ID quán
+        shop_info = get_restaurant_id_from_slug(slug)
+        if not shop_info or not shop_info['id']:
+            print("   ❌ Không lấy được ID quán. Link có thể bị lỗi.")
+            continue
+            
+        shop_id = shop_info['id']
+        shop_name = shop_info['name']
+        
+        # 3. Tạo tên file tự động theo thành phố (TỰ ĐỘNG PHÂN LOẠI TỆP KHÁCH HÀNG)
+        output_file = os.path.join(DATA_FOLDER, f"reviews_{city_info['name']}.jsonl")
+        
+        # 4. Crawl Review
+        print(f"   -> Đang tải review cho quán: {shop_name}...")
+        api_review = f"https://gappapi.deliverynow.vn/api/delivery/get_reply?id_type=1&request_id={shop_id}&sort_type=1&limit={limit_per_shop}"
+        
+        try:
+            res = requests.get(api_review, headers=HEADERS)
+            reviews = res.json().get('reply', {}).get('reply_list', [])
+            
+            if not reviews:
+                print("   ⚠️ Quán này chưa có review nào.")
+                continue
+
+            with open(output_file, 'a', encoding='utf-8') as f:
+                for rev in reviews:
+                    item = ReviewItem(
+                        review_id=rev.get('id'),
+                        restaurant_id=shop_id,
+                        restaurant_name=shop_name,
+                        city=city_info['name'], # Lưu tên thành phố vào từng dòng
+                        user_name=rev.get('name', 'Anonymous'),
+                        comment=rev.get('comment', ''),
+                        rating=rev.get('rating', 0),
+                        review_date=rev.get('created_on', '')
+                    )
+                    f.write(item.to_json_line() + "\n")
+            
+            print(f"   ✅ Đã lưu {len(reviews)} reviews vào file: reviews_{city_info['name']}.jsonl")
+            
+        except Exception as e:
+            print(f"   ❌ Lỗi crawl review: {e}")
+            
+        # Nghỉ nhẹ để không bị spam
+        time.sleep(random.uniform(1, 3))
+
+# --- MAIN RUN ---
+if __name__ == "__main__":
+    
+    # BẠN CHỈ CẦN DÁN LIST LINK VÀO ĐÂY (LỘN XỘN CŨNG ĐƯỢC)
+    # Code sẽ tự tách: Link nào Hà Nội -> Vào file HaNoi, Link nào HCM -> Vào file HCM
+    
+    MY_LINKS = [
+        # Link Hà Nội
+        "https://shopeefood.vn/ha-noi/pho-thin-lo-duc", 
+        "https://shopeefood.vn/ha-noi/bun-cha-dac-kim-hang-manh",
+        
+        # Link Sài Gòn
+        "https://shopeefood.vn/ho-chi-minh/com-tam-cali-nguyen-trai-q1",
+        "https://shopeefood.vn/ho-chi-minh/phuc-long-lotte-mart-le-dai-hanh",
+        
+        # Link Đà Nẵng
+        "https://shopeefood.vn/da-nang/my-quang-ba-mua-tran-binh-trong"
+    ]
+    
+    crawl_reviews_by_link(MY_LINKS, limit_per_shop=50)
+
+```
+
+### Cách hoạt động của code này
+
+1. **Đầu vào:** Một danh sách `MY_LINKS` chứa các URL ShopeeFood.
+2. **Bộ lọc (`analyze_url`):**
+* Nó cắt chuỗi URL: `.../ha-noi/pho-thin` -> Nó bắt được chữ **`ha-noi`**.
+* Nó tra từ điển: `ha-noi` => Lưu vào file `reviews_HaNoi.jsonl`.
+* Nếu link là `.../ho-chi-minh/...` => Lưu vào file `reviews_HCM.jsonl`.
+
+
+3. **Đầu ra:**
+* Bạn không cần tạo nhiều file code. Chỉ cần chạy 1 file này.
+* Kết quả tự động sinh ra trong thư mục `data_sentiment`:
+* 📁 `reviews_HaNoi.jsonl` (Chứa review Phở Thìn, Bún Chả...)
+* 📁 `reviews_HCM.jsonl` (Chứa review Cơm Tấm, Phúc Long...)
+
+
+
+
+
+Cách này đáp ứng hoàn hảo yêu cầu của bạn: **Dùng link để định vị khách hàng.**
