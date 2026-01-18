@@ -1458,5 +1458,198 @@ if __name__ == "__main__":
 * **Ví dụ:** Nếu muốn thêm Vũng Tàu vào Miền Nam:
 ```python
 "MienNam": [..., "vung-tau"]
+DATE 18/1/2026 chuyển sang cào foody thay vì shopeefood
+```
+Chuyển sang **Foody** là một ý tưởng **CỰC KỲ SÁNG SUỐT** lúc này! 💡
+
+Bạn nói đúng, Foody là trang "mẹ" (phiên bản web review truyền thống), trong khi ShopeeFood là trang "con" (thiên về đặt món thương mại điện tử).
+
+* **ShopeeFood:** Bảo mật cực gắt (tương đương sàn Shopee) để chống gian lận đơn hàng -> **Rất khó Crawl API.**
+* **Foody:** Bảo mật lỏng hơn, giao diện thuần HTML -> **Dễ Crawl bằng HTML (Scraping) hơn nhiều.**
+
+Chúng ta sẽ đổi chiến thuật: Thay vì cố đấm ăn xôi với cái API bị chặn của ShopeeFood, chúng ta sẽ dùng Selenium để **"đọc màn hình"** trang Foody.vn. Cách này **chậm hơn chút** nhưng **chắc ăn 100%** (nếu mắt bạn nhìn thấy web thì code sẽ lấy được).
+
+Dưới đây là Code dành riêng cho Foody.
+
+### BƯỚC 1: TẠO FILE `crawl_foody.py`
+
+Copy toàn bộ code này. Lưu ý là input bây giờ sẽ là **link Foody** (ví dụ: `foody.vn/...`) chứ không phải ShopeeFood nữa nhé.
+
+```python
+import json
+import time
+import os
+import random
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from webdriver_manager.chrome import ChromeDriverManager
+from schema_sentiment import ReviewItem
+
+# --- CẤU HÌNH ---
+DATA_FOLDER = "data_foody"
+if not os.path.exists(DATA_FOLDER):
+    os.makedirs(DATA_FOLDER)
+
+REGION_MAPPING = {
+    "MienBac": ["ha-noi", "hai-phong", "quang-ninh", "bac-ninh"],
+    "MienTrung": ["da-nang", "hue", "khanh-hoa", "nha-trang", "quy-nhon", "vinh"],
+    "MienNam": ["ho-chi-minh", "can-tho", "dong-nai", "binh-duong", "vung-tau"]
+}
+
+def setup_driver():
+    options = webdriver.ChromeOptions()
+    # options.add_argument("--headless") # Để hiện trình duyệt để xem nó chạy
+    options.add_argument("--disable-gpu")
+    options.add_argument("--no-sandbox")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option('useAutomationExtension', False)
+    
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=options)
+    return driver
+
+def detect_region_from_url(url):
+    # Link Foody: https://www.foody.vn/ha-noi/pho-thin-13-lo-duc
+    clean_url = url.replace("https://www.foody.vn/", "").replace("http://www.foody.vn/", "")
+    parts = clean_url.split("/")
+    if len(parts) < 2: return None, None, None
+    city_slug = parts[0]
+    shop_slug = parts[1].split("?")[0]
+    
+    found_region = "Khac"
+    for region, cities in REGION_MAPPING.items():
+        if city_slug in cities:
+            found_region = region
+            break
+    return found_region, city_slug, shop_slug
+
+def crawl_foody_html(url_list):
+    print("🚀 Đang khởi động Chrome để quét Foody...")
+    driver = setup_driver()
+    
+    for url in url_list:
+        region, city, slug = detect_region_from_url(url)
+        if not region: 
+            print(f"⚠️ Link lỗi vùng miền: {url}")
+            continue
+            
+        # Foody thường có tab Bình luận riêng, ta thêm /binh-luan vào đuôi
+        # Vd: .../pho-thin-13-lo-duc/binh-luan
+        if "/binh-luan" not in url:
+            review_url = url.rstrip("/") + "/binh-luan"
+        else:
+            review_url = url
+            
+        print(f"\n🌍 {region} | Đang vào: {review_url}")
+        output_file = os.path.join(DATA_FOLDER, f"reviews_{region}.jsonl")
+        
+        try:
+            driver.get(review_url)
+            time.sleep(5) # Đợi trang load
+            
+            # --- KỸ THUẬT SCRAPING HTML (Đọc thẻ div) ---
+            # Foody chứa review trong các thẻ <li> class="review-item"
+            # Lưu ý: Class này có thể thay đổi tùy giao diện, nhưng thường là cấu trúc này
+            
+            # 1. Tìm danh sách các khung review
+            review_elements = driver.find_elements(By.CSS_SELECTOR, "div.review-item")
+            
+            if not review_elements:
+                # Thử selector khác nếu Foody đổi giao diện (dự phòng)
+                review_elements = driver.find_elements(By.XPATH, "//div[contains(@class, 'review-item')]")
+            
+            print(f"   👀 Tìm thấy {len(review_elements)} review trên màn hình.")
+            
+            items_collected = []
+            
+            for index, element in enumerate(review_elements):
+                try:
+                    # Lấy tên người dùng
+                    try:
+                        user_name = element.find_element(By.CSS_SELECTOR, ".ru-username").text
+                    except: 
+                        user_name = "Anonymous"
+                    
+                    # Lấy điểm số (Rating)
+                    try:
+                        # Điểm thường nằm trong thẻ span class point
+                        rating_text = element.find_element(By.CSS_SELECTOR, "div.review-points span").text
+                        rating = float(rating_text)
+                    except:
+                        rating = 0.0
+                        
+                    # Lấy nội dung comment
+                    try:
+                        comment = element.find_element(By.CSS_SELECTOR, ".rd-des").text
+                    except:
+                        comment = ""
+                        
+                    # Lấy ngày tháng (nếu cần)
+                    # date = element.find_element(By.CSS_SELECTOR, ".ru-time").text
+                    
+                    if comment: # Chỉ lấy nếu có nội dung
+                        item = ReviewItem(
+                            review_id=f"{slug}_{index}", # Tạo ID giả vì HTML ko có ID chuẩn
+                            restaurant_id=0, # Foody HTML ko hiện ID quán, để 0
+                            restaurant_name=slug,
+                            city=city,
+                            user_name=user_name,
+                            comment=comment,
+                            rating=rating,
+                            review_date=""
+                        )
+                        items_collected.append(item)
+                        
+                except Exception as e:
+                    continue # Bỏ qua review lỗi
+            
+            # Ghi vào file
+            if items_collected:
+                with open(output_file, 'a', encoding='utf-8') as f:
+                    for item in items_collected:
+                        f.write(item.to_json_line() + "\n")
+                print(f"   🎉 Đã lưu {len(items_collected)} reviews!")
+            else:
+                print("   ⚠️ Không lấy được nội dung review nào (Check lại CSS Selector).")
+
+        except Exception as e:
+            print(f"   ❌ Lỗi khi quét trang: {e}")
+            
+        time.sleep(random.uniform(2, 4))
+
+    print("\n🏁 Hoàn tất!")
+    driver.quit()
+
+if __name__ == "__main__":
+    # LƯU Ý: DÙNG LINK FOODY.VN (Không phải ShopeeFood)
+    MY_LINKS = [
+        # Link Hà Nội
+        "https://www.foody.vn/ha-noi/pho-thin-13-lo-duc",
+        
+        # Link Sài Gòn
+        "https://www.foody.vn/ho-chi-minh/com-tam-cali-nguyen-trai-q1",
+        
+        # Link Đà Nẵng / Quy Nhơn (Cứ lấy link foody là được)
+        "https://www.foody.vn/binh-dinh/bun-ca-phuong-teo-nguyen-hue"
+    ]
+    
+    crawl_foody_html(MY_LINKS)
 
 ```
+
+### BƯỚC 2: CÁCH LẤY LINK FOODY
+
+Bạn lên Google gõ tên quán + chữ "Foody".
+Ví dụ: "Bún cá Phượng Tèo Foody".
+
+* Google sẽ trả về: `foody.vn/binh-dinh/bun-ca-phuong-teo...`
+* Copy link đó dán vào code.
+
+### TẠI SAO CÁCH NÀY DỄ HƠN?
+
+1. **Không cần API:** Code trên hoạt động như mắt người. Nó tìm thẻ `<div>` chứa chữ và copy lại.
+2. **Ít bị chặn:** Foody ít khi chặn người dùng xem trang web bình thường.
+3. **Nhược điểm:** Bạn chỉ lấy được khoảng 10-20 review hiển thị sẵn trên trang đầu tiên (muốn lấy hết phải code thêm chức năng cuộn chuột "Load More"). Nhưng để làm đồ án thì mỗi quán lấy 20 review cũng tạm đủ rồi!
+
+Bạn thử chạy code này xem, đảm bảo sẽ thấy folder `data_foody` có dữ liệu ngay!
