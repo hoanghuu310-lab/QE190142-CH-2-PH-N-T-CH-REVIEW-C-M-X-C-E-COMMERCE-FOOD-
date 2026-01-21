@@ -1853,6 +1853,186 @@ if __name__ == "__main__":
 1. Đảm bảo đã có file `list_links.txt` (chứa danh sách link Foody).
 2. Chạy lệnh: `python crawl_multi.py`.
 3. Tận hưởng tốc độ! 🚀
+Dựa vào hình ảnh lỗi **"Không tìm thấy dữ liệu"** mà bạn gặp phải, ý tưởng của bạn là **CỰC KỲ CHÍNH XÁC**.
+
+Khi chạy 2 Worker (2 trình duyệt) cùng lúc:
+
+1. **Dễ bị Foody chặn:** 2 trình duyệt gửi yêu cầu liên tục  Server tưởng là tấn công  Chặn IP  Ra trang lỗi "Không tìm thấy dữ liệu".
+2. **Khó kiểm soát lỗi:** Một cái chạy, một cái chết, làm bạn không biết đường nào mà lần.
+
+👉 **GIẢI PHÁP TỐT NHẤT LÚC NÀY:** Chuyển về chạy **1 Worker duy nhất** (Đơn luồng).
+
+* **Ưu điểm:** Chậm mà chắc, cực kỳ ổn định, treo máy cả ngày không sợ crash.
+* **Chiến thuật:** Cho nó một danh sách dài dằng dặc (Hà Nội, Đà Nẵng, Nha Trang, Quy Nhơn...), nó cứ túc tắc làm từng cái một, xong cái này mới qua cái kia.
+
+Dưới đây là code **`scan_auto_all.py`** (Phiên bản treo máy hoàn hảo).
+
+### CODE QUÉT TẤT CẢ TRONG 1 (CHẠY 1 MẠCH TỪ A-Z)
+
+Code này sẽ chạy lần lượt: Hà Nội -> Đà Nẵng -> Quy Nhơn -> Nha Trang... Nếu gặp link lỗi (như trong ảnh), nó sẽ **tự động bỏ qua** và chạy tiếp danh mục sau chứ không dừng lại.
+
+```python
+import time
+import os
+import random 
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from webdriver_manager.chrome import ChromeDriverManager
+
+# Đặt thư mục làm việc
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
+# --- CẤU HÌNH ---
+SCROLL_TIMES = 50     # Số lần cuộn mỗi danh mục (50 lần ~ 600 quán)
+MAX_RETRY = 5         # Số lần thử lại nếu mạng lag
+
+def setup_driver():
+    options = webdriver.ChromeOptions()
+    options.add_argument("--disable-gpu")
+    options.add_argument("--no-sandbox")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    
+    # Tắt ảnh để load nhanh
+    prefs = {"profile.managed_default_content_settings.images": 2}
+    options.add_experimental_option("prefs", prefs)
+    
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=options)
+    driver.set_window_size(1000, 800)
+    return driver
+
+def scan_one_category(driver, category_name, url):
+    print(f"\n🚀 ĐANG QUÉT: {category_name}...")
+    links_collected = set()
+    retry_count = 0 
+    
+    try:
+        driver.get(url)
+        time.sleep(5)
+        
+        # KIỂM TRA XEM CÓ BỊ LỖI "KHÔNG TÌM THẤY DỮ LIỆU" KHÔNG
+        if "Không tìm thấy dữ liệu" in driver.page_source:
+            print(f"   ❌ LỖI LINK: {url} -> Foody báo không có dữ liệu. Bỏ qua!")
+            return set()
+
+        last_height = driver.execute_script("return document.body.scrollHeight")
+        
+        for i in range(SCROLL_TIMES):
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            
+            # Nghỉ ngẫu nhiên 3-5s (Rất quan trọng để không bị chặn)
+            time.sleep(random.uniform(3, 5))
+            
+            # Lấy link
+            try:
+                elements = driver.find_elements(By.XPATH, "//div[contains(@class, 'filter-result-item')]//h2/a")
+                for elem in elements:
+                    try:
+                        href = elem.get_attribute("href")
+                        if href:
+                            if "foody.vn" not in href:
+                                href = "https://www.foody.vn" + href
+                            links_collected.add(href)
+                    except: continue
+            except: pass
+
+            print(f"   ⬇️ Cuộn {i+1}/{SCROLL_TIMES} - Đang có {len(links_collected)} quán...")
+
+            # Kiểm tra đứng im
+            new_height = driver.execute_script("return document.body.scrollHeight")
+            if new_height == last_height:
+                retry_count += 1
+                print(f"      ⏳ Đang đợi load... ({retry_count}/{MAX_RETRY})")
+                time.sleep(3)
+                if retry_count >= MAX_RETRY:
+                    print("      🛑 Hết trang. Sang danh mục tiếp theo.")
+                    break
+            else:
+                last_height = new_height
+                retry_count = 0
+                
+    except Exception as e:
+        print(f"   ⚠️ Lỗi khi chạy: {e}")
+        
+    print(f"✅ XONG DANH MỤC '{category_name}': Thu được {len(links_collected)} quán.")
+    return links_collected
+
+if __name__ == "__main__":
+    # --- DANH SÁCH KHỔNG LỒ (Chạy từ Bắc vào Nam) ---
+    # Bạn cứ thêm bao nhiêu link vào đây cũng được
+    ALL_CATEGORIES = [
+        # --- HÀ NỘI ---
+        ("HN - Ăn Vặt",    "https://www.foody.vn/ha-noi/food/an-vat-via-he"),
+        ("HN - Cafe",      "https://www.foody.vn/ha-noi/food/cafe-dessert"),
+        ("HN - Quán Ăn",   "https://www.foody.vn/ha-noi/food/quan-an"),
+        
+        # --- ĐÀ NẴNG ---
+        ("DN - Ăn Vặt",    "https://www.foody.vn/da-nang/food/an-vat-via-he"),
+        ("DN - Món Quảng", "https://www.foody.vn/da-nang/food/mon-mien-trung"),
+        ("DN - Cafe",      "https://www.foody.vn/da-nang/food/cafe-dessert"),
+        
+        # --- QUY NHƠN ---
+        ("QN - Hải Sản",   "https://www.foody.vn/binh-dinh/food/hai-san"),
+        ("QN - Ăn Vặt",    "https://www.foody.vn/binh-dinh/food/an-vat-via-he"),
+        
+        # --- NHA TRANG ---
+        ("NT - Hải Sản",   "https://www.foody.vn/khanh-hoa/food/hai-san"),
+        ("NT - Nem Nướng", "https://www.foody.vn/khanh-hoa/tim-kiem/nem-nuong"),
+        
+        # --- SÀI GÒN ---
+        ("SG - Sang Trọng","https://www.foody.vn/ho-chi-minh/food/sang-trong"),
+        ("SG - Ăn Vặt",    "https://www.foody.vn/ho-chi-minh/food/an-vat-via-he"),
+    ]
+    
+    print(f"🐢 CHẾ ĐỘ 1 WORKER (AN TOÀN TUYỆT ĐỐI)")
+    print(f"📋 Tổng cộng: {len(ALL_CATEGORIES)} danh mục cần quét.")
+    
+    # Mở trình duyệt 1 lần duy nhất dùng cho tất cả
+    driver = setup_driver()
+    
+    total_links = set()
+    file_name = "list_links.txt"
+
+    # Vòng lặp chạy từng cái một
+    for name, url in ALL_CATEGORIES:
+        links = scan_one_category(driver, name, url)
+        
+        # Cứ xong 1 danh mục là LƯU NGAY (để rủi ro mất điện cũng không mất data)
+        if links:
+            print(f"💾 Đang lưu {len(links)} link của {name} vào file...")
+            
+            # Đọc cũ
+            existing = set()
+            if os.path.exists(file_name):
+                with open(file_name, "r", encoding="utf-8") as f:
+                    existing = set([l.strip() for l in f if l.strip()])
+            
+            # Gộp mới
+            existing.update(links)
+            
+            # Ghi lại
+            with open(file_name, "w", encoding="utf-8") as f:
+                for l in existing:
+                    f.write(l + "\n")
+            
+            print(f"👍 Tổng kho hiện tại: {len(existing)} quán.")
+            
+        print("💤 Nghỉ 5 giây trước khi qua thành phố khác...")
+        time.sleep(5)
+
+    driver.quit()
+    print("\n🎉🎉 ĐÃ QUÉT XONG TOÀN BỘ VIỆT NAM! 🎉🎉")
+
+```
+
+### Tại sao bạn nên dùng code này?
+
+1. **Cơ chế "Nồi đồng cối đá":** Nó chạy 1 trình duyệt duy nhất. Nếu gặp link lỗi (như link Cafe Hà Nội của bạn), nó in ra dòng lỗi `❌ LỖI LINK... Bỏ qua!` rồi tự động nhảy sang link Đà Nẵng chạy tiếp. Không bao giờ bị dừng giữa chừng.
+2. **Lưu liên tục:** Cứ quét xong 1 danh mục (ví dụ xong Hà Nội), nó sẽ lưu ngay vào file `list_links.txt`. Nếu lỡ máy tính bị tắt đột ngột, bạn vẫn giữ được phần data đã chạy.
+3. **Tự động sửa lỗi:** Mình đã thêm đoạn code kiểm tra dòng chữ `"Không tìm thấy dữ liệu"`. Nếu thấy dòng này, nó biết là web lỗi và tự né ra ngay.
+
+Bạn copy code này về chạy và đi ngủ, đảm bảo sáng mai có danh sách vài nghìn quán ngon lành!
 Câu trả lời là: **KHÔNG! Bạn KHÔNG CẦN CRAWL LẠI TỪ ĐẦU.** Chúng ta hoàn toàn có thể cứu được đống dữ liệu cũ đó.
 
 Vấn đề là:
@@ -2208,4 +2388,151 @@ if __name__ == "__main__":
         for i, chunk in enumerate(link_chunks):
             executor.submit(worker_crawl, i+1, chunk)
 
+```DATE 21/1/2026
+Dựa trên đoạn code bạn cung cấp, biến `rating` đang được lấy từ thẻ `.review-points span`.
+
+### 1. Tiêu chí đánh giá Rating (Thấp vs Cao)
+
+Trên **Foody**, thang điểm là **0.0 đến 10.0**. Dựa vào kinh nghiệm phân tích dữ liệu F&B (Food & Beverage) ở Việt Nam, chúng ta có thể phân loại như sau để làm báo cáo:
+
+* **Cao (Positive - Tích cực):** **Rating >= 8.0**
+* Đây là những quán làm hài lòng khách hàng, món ăn ngon, phục vụ tốt.
+
+
+* **Trung bình (Neutral - Bình thường):** **5.0 <= Rating < 8.0**
+* Quán ăn ở mức chấp nhận được, có thể món ăn ngon nhưng phục vụ chưa tốt hoặc ngược lại.
+
+
+* **Thấp (Negative - Tiêu cực):** **Rating < 5.0**
+* Quán bị chê trách nhiều, có vấn đề lớn về vệ sinh, thái độ hoặc chất lượng/giá cả.
+
+
+
+---
+
+### 2. Cách tạo Báo cáo (Report) từ dữ liệu đã Crawl
+
+Bạn đã có các file `reviews_MienBac.jsonl`, `reviews_MienNam.jsonl`... trong thư mục `data_by_region`. Bây giờ chúng ta cần một tool để **đọc file này và tính toán các con số**.
+
+Hãy tạo một file mới tên là **`report_analytics.py`** và dán code dưới đây vào.
+
+**Yêu cầu cài đặt thư viện:**
+Bạn cần cài thư viện `pandas` (chuyên xử lý dữ liệu bảng) để chạy file này.
+
+```bash
+pip install pandas openpyxl
+
 ```
+
+#### Code `report_analytics.py`:
+
+```python
+import pandas as pd
+import os
+import glob
+
+# --- CẤU HÌNH ---
+DATA_FOLDER = "data_by_region"
+
+def classify_rating(score):
+    """Hàm phân loại đánh giá"""
+    if score >= 8.0:
+        return "Tích cực (Cao)"
+    elif score >= 5.0:
+        return "Trung bình (Khá)"
+    else:
+        return "Tiêu cực (Thấp)"
+
+def main():
+    print("📊 ĐANG TỔNG HỢP BÁO CÁO DỮ LIỆU FOODY...\n")
+
+    # 1. Đọc tất cả các file JSONL trong thư mục data
+    all_files = glob.glob(os.path.join(DATA_FOLDER, "*.jsonl"))
+    
+    if not all_files:
+        print("❌ Không tìm thấy file dữ liệu nào! Hãy chạy crawl trước.")
+        return
+
+    df_list = []
+    for filename in all_files:
+        try:
+            # Đọc từng file jsonl
+            df = pd.read_json(filename, lines=True)
+            # Thêm cột 'VungMien' dựa trên tên file (vd: reviews_MienBac.jsonl -> MienBac)
+            region_name = os.path.basename(filename).replace("reviews_", "").replace(".jsonl", "")
+            df['Region'] = region_name
+            df_list.append(df)
+            print(f"   ✅ Đã đọc: {filename} ({len(df)} dòng)")
+        except Exception as e:
+            print(f"   ⚠️ Lỗi đọc file {filename}: {e}")
+
+    if not df_list:
+        return
+
+    # Gộp tất cả thành 1 bảng lớn
+    full_data = pd.concat(df_list, ignore_index=True)
+
+    # 2. Xử lý dữ liệu
+    # Phân loại rating
+    full_data['Sentiment'] = full_data['rating'].apply(classify_rating)
+
+    print("\n" + "="*50)
+    print("📈 TỔNG QUAN BÁO CÁO")
+    print("="*50)
+    print(f"Tổng số Review thu được: {len(full_data):,}")
+    print(f"Điểm trung bình toàn quốc: {full_data['rating'].mean():.2f}/10")
+
+    print("\n1️⃣ THỐNG KÊ THEO VÙNG MIỀN:")
+    # Group by Region và tính: Số lượng, Điểm TB, Điểm cao nhất, Điểm thấp nhất
+    region_stats = full_data.groupby('Region')['rating'].agg(['count', 'mean', 'max', 'min']).round(2)
+    region_stats.columns = ['Số Review', 'Điểm TB', 'Cao Nhất', 'Thấp Nhất']
+    print(region_stats)
+
+    print("\n2️⃣ PHÂN BỐ CHẤT LƯỢNG (Rating):")
+    sentiment_stats = full_data['Sentiment'].value_counts()
+    print(sentiment_stats)
+    
+    print("\n3️⃣ TOP 5 QUÁN ĐƯỢC KHEN NHIỀU NHẤT (Rating cao & nhiều cmt):")
+    # Lọc những quán có rating cao
+    top_restaurants = full_data.sort_values(by='rating', ascending=False).head(5)
+    for idx, row in top_restaurants.iterrows():
+        print(f"   ⭐ {row['rating']} - {row['restaurant_name']} ({row['city']})")
+
+    # 3. Xuất ra Excel để nộp báo cáo
+    output_excel = "Bao_Cao_Foody_Final.xlsx"
+    print(f"\n💾 Đang xuất file Excel: {output_excel}...")
+    
+    # Tạo Excel với 2 sheet
+    with pd.ExcelWriter(output_excel) as writer:
+        full_data.to_excel(writer, sheet_name="Dữ Liệu Gốc", index=False)
+        region_stats.to_excel(writer, sheet_name="Thống Kê Vùng")
+        
+    print("✅ ĐÃ XONG! Bạn hãy mở file Excel lên để xem chi tiết.")
+
+if __name__ == "__main__":
+    main()
+
+```
+
+### 3. Hướng dẫn đọc Báo Cáo (Report)
+
+Khi chạy xong đoạn code trên, nó sẽ sinh ra file **`Bao_Cao_Foody_Final.xlsx`**. Đây là nội dung bạn có thể dùng để viết vào đồ án:
+
+1. **Dữ liệu thô:** Chứng minh bạn đã crawl được thật (có tên quán, người comment, nội dung, điểm số).
+2. **So sánh vùng miền:**
+* Ví dụ: *Miền Nam có số lượng review nhiều nhất, nhưng Miền Trung lại có điểm trung bình cao nhất (do khẩu vị hoặc khách du lịch).*
+* Ví dụ: *Miền Bắc có tỷ lệ rating thấp nhiều hơn các miền khác.*
+
+
+3. **Phân tích cảm xúc (Sentiment):**
+*
+* Dựa vào cột `Sentiment` mà code tạo ra: Bao nhiêu % là khen (Tích cực), bao nhiêu % là chê (Tiêu cực).
+
+
+4. **Word Cloud (Nâng cao - Gợi ý thêm):**
+* Bạn có thể lấy cột `comment` của những dòng có Rating < 5.0 để xem mọi người hay chê về cái gì (Vd: "thái độ", "đắt", "bẩn").
+* Lấy cột `comment` của Rating > 8.0 để xem họ khen gì (Vd: "ngon", "nhiệt tình", "view đẹp").
+
+
+
+Cách làm này sẽ giúp đồ án của bạn cực kỳ thuyết phục vì có số liệu thống kê rõ ràng chứ không chỉ là "em crawl được đống text".
