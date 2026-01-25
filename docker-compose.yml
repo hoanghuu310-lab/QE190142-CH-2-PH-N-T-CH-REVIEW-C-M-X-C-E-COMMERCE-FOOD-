@@ -1,1 +1,29 @@
+version: '3.8'
 
+services:
+  # 1. MINIO (Data Lake)
+  minio:
+    image: minio/minio
+    container_name: foody_minio
+    ports:
+      - "9000:9000" # Cổng API
+      - "9001:9001" # Cổng Web quản lý
+    environment:
+      MINIO_ROOT_USER: "admin"
+      MINIO_ROOT_PASSWORD: "password123"
+    command: server /data --console-address ":9001"
+    volumes:
+      - ./minio_data:/data
+
+  # 2. POSTGRESQL (Database)
+  postgres:
+    image: postgres:13
+    container_name: foody_db
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: "user"
+      POSTGRES_PASSWORD: "password"
+      POSTGRES_DB: "foody_analytics"
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
